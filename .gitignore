@@ -1,0 +1,21 @@
+# Build outputs
+target/
+*.class
+*.jar
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.gradle/
+
+# Logs
+*.log

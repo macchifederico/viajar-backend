@@ -1,0 +1,48 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/viajarapp}
+    username: ${DB_USER:viajarapp}
+    password: ${DB_PASS:viarapp}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 2
+    locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 30MB
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 8085
+
+jwt:
+  secret: ${JWT_SECRET:dev-secret-change-in-production-32x}
+  refresh-secret: ${JWT_REFRESH_SECRET:dev-refresh-secret-change-in-production!}
+  access-expiration-ms: 900000
+  refresh-expiration-ms: 604800000
+
+aws:
+  s3:
+    bucket: ${AWS_S3_BUCKET:}
+    region: ${AWS_REGION:us-east-1}
+    access-key: ${AWS_ACCESS_KEY_ID:}
+    secret-key: ${AWS_SECRET_ACCESS_KEY:}
+
+price:
+  per-km-ars: ${PRICE_PER_KM_ARS:150}
