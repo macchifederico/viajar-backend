@@ -22,6 +22,7 @@ public record VehicleResponse(
         String vtvUrl,
         Instant vtvExpiresAt,
         int doors,
+        int seats,
         boolean hasAc,
         boolean hasSeatbelts
 ) {
@@ -32,7 +33,7 @@ public record VehicleResponse(
                 v.getVerifiedAt(), v.getCedulaUrl(), v.getInsurancePolicy(),
                 v.getInsuranceUrl(), v.getInsuranceExpiresAt(),
                 v.getVtvUrl(), v.getVtvExpiresAt(),
-                v.getDoors(), v.isHasAc(), v.isHasSeatbelts()
+                v.getDoors(), v.getSeats(), v.isHasAc(), v.isHasSeatbelts()
         );
     }
 }

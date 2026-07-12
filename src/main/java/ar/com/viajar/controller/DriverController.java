@@ -4,6 +4,7 @@ import ar.com.viajar.dto.request.DriverProfileRequest;
 import ar.com.viajar.dto.response.ApiResponse;
 import ar.com.viajar.dto.response.UserResponse;
 import ar.com.viajar.service.DriverService;
+import ar.com.viajar.util.FileValidation;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -28,10 +29,13 @@ public class DriverController {
     public ApiResponse<UserResponse> submitProfile(
             @AuthenticationPrincipal UUID userId,
             @Valid @ModelAttribute DriverProfileRequest req,
-            @RequestPart(required = false) MultipartFile dniPhoto,
-            @RequestPart(required = false) MultipartFile licensePhoto,
-            @RequestPart(required = false) MultipartFile criminalRecord
+            @RequestPart MultipartFile dniPhoto,
+            @RequestPart MultipartFile licensePhoto,
+            @RequestPart MultipartFile criminalRecord
     ) {
+        FileValidation.validate(dniPhoto, "La foto del DNI");
+        FileValidation.validate(licensePhoto, "La foto de la licencia");
+        FileValidation.validate(criminalRecord, "El certificado de antecedentes penales");
         return new ApiResponse<>(driverService.submitProfile(userId, req, dniPhoto, licensePhoto, criminalRecord));
     }
 }

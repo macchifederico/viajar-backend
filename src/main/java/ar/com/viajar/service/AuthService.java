@@ -67,8 +67,9 @@ public class AuthService {
 
     public TokensResponse refresh(String refreshToken) {
         UUID userId = jwtUtil.extractUserIdFromRefresh(refreshToken);
+        User user = userRepository.findById(userId).orElseThrow(AppException::unauthorized);
         return new TokensResponse(
-                jwtUtil.generateAccessToken(userId),
+                jwtUtil.generateAccessToken(user.getId(), user.getRole()),
                 jwtUtil.generateRefreshToken(userId)
         );
     }
@@ -85,7 +86,7 @@ public class AuthService {
 
     private AuthResponse buildAuthResponse(User user) {
         return new AuthResponse(
-                jwtUtil.generateAccessToken(user.getId()),
+                jwtUtil.generateAccessToken(user.getId(), user.getRole()),
                 jwtUtil.generateRefreshToken(user.getId()),
                 UserResponse.from(user)
         );

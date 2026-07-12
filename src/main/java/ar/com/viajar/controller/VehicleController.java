@@ -4,6 +4,7 @@ import ar.com.viajar.dto.request.CreateVehicleRequest;
 import ar.com.viajar.dto.response.ApiResponse;
 import ar.com.viajar.dto.response.VehicleResponse;
 import ar.com.viajar.service.VehicleService;
+import ar.com.viajar.util.FileValidation;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -34,10 +35,13 @@ public class VehicleController {
             @AuthenticationPrincipal UUID userId,
             @Valid @ModelAttribute CreateVehicleRequest req,
             @RequestPart(required = false) MultipartFile photo,
-            @RequestPart(required = false) MultipartFile cedula,
-            @RequestPart(required = false) MultipartFile insurance,
-            @RequestPart(required = false) MultipartFile vtv
+            @RequestPart MultipartFile cedula,
+            @RequestPart MultipartFile insurance,
+            @RequestPart MultipartFile vtv
     ) {
+        FileValidation.validate(cedula, "La cédula del vehículo");
+        FileValidation.validate(insurance, "La póliza de seguro");
+        FileValidation.validate(vtv, "La VTV/RTO");
         return new ApiResponse<>(vehicleService.createVehicle(userId, req, buildFileMap(photo, cedula, insurance, vtv)));
     }
 

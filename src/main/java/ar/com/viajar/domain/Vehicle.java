@@ -68,6 +68,9 @@ public class Vehicle {
     @Column(nullable = false)
     private int doors = 4;
 
+    @Column(nullable = false)
+    private int seats = 4;
+
     @Column(name = "has_ac", nullable = false)
     private boolean hasAc = false;
 

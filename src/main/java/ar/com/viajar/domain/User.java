@@ -69,9 +69,6 @@ public class User {
     @Column(name = "dni_photo_url")
     private String dniPhotoUrl;
 
-    @Column(name = "license_number", unique = true)
-    private String licenseNumber;
-
     @Column(name = "license_category")
     private String licenseCategory;
 

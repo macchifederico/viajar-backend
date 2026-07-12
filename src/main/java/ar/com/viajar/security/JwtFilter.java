@@ -1,5 +1,6 @@
 package ar.com.viajar.security;
 
+import ar.com.viajar.domain.enums.UserRole;
 import ar.com.viajar.exception.AppException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -7,6 +8,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -27,8 +30,13 @@ public class JwtFilter extends OncePerRequestFilter {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             try {
-                UUID userId = jwtUtil.extractUserIdFromAccess(header.substring(7));
-                var auth = new UsernamePasswordAuthenticationToken(userId, null, List.of());
+                String token = header.substring(7);
+                UUID userId = jwtUtil.extractUserIdFromAccess(token);
+                UserRole role = jwtUtil.extractRoleFromAccess(token);
+                List<GrantedAuthority> authorities = List.of(
+                        new SimpleGrantedAuthority("ROLE_" + role.name().toUpperCase())
+                );
+                var auth = new UsernamePasswordAuthenticationToken(userId, null, authorities);
                 SecurityContextHolder.getContext().setAuthentication(auth);
             } catch (AppException ignored) {
                 // Invalid token: let Spring Security reject the request

@@ -22,7 +22,7 @@ import java.util.concurrent.CompletableFuture;
 @RequiredArgsConstructor
 public class VehicleService {
 
-    private static final int MAX_VEHICLE_AGE_YEARS = 15;
+    private static final int MAX_VEHICLE_AGE_YEARS = 20;
 
     private final VehicleRepository vehicleRepository;
     private final S3Service s3Service;
@@ -39,6 +39,8 @@ public class VehicleService {
         if (req.year() < minYear) {
             throw AppException.badRequest("El vehículo no puede tener más de " + MAX_VEHICLE_AGE_YEARS + " años");
         }
+        Instant insuranceExpiresAt = parseFutureDate(req.insuranceExpiresAt(), "Vencimiento de seguro");
+        Instant vtvExpiresAt = parseFutureDate(req.vtvExpiresAt(), "Vencimiento de VTV");
 
         Map<String, String> urls = uploadVehicleFiles(driverId, files);
 
@@ -47,14 +49,15 @@ public class VehicleService {
         v.setBrand(req.brand());
         v.setModel(req.model());
         v.setYear(req.year());
-        v.setPlate(req.plate());
+        v.setPlate(req.plate().toUpperCase());
         v.setColor(req.color());
-        v.setDoors(req.doors() != null ? req.doors() : 4);
+        v.setDoors(req.doors());
+        v.setSeats(req.seats());
         v.setHasAc(req.hasAc() != null && req.hasAc());
         v.setHasSeatbelts(req.hasSeatbelts() == null || req.hasSeatbelts());
         if (req.insurancePolicy() != null) v.setInsurancePolicy(req.insurancePolicy());
-        if (req.insuranceExpiresAt() != null) v.setInsuranceExpiresAt(Instant.parse(req.insuranceExpiresAt() + "T00:00:00Z"));
-        if (req.vtvExpiresAt() != null) v.setVtvExpiresAt(Instant.parse(req.vtvExpiresAt() + "T00:00:00Z"));
+        if (insuranceExpiresAt != null) v.setInsuranceExpiresAt(insuranceExpiresAt);
+        if (vtvExpiresAt != null) v.setVtvExpiresAt(vtvExpiresAt);
         if (urls.get("photo") != null) v.setPhotoUrl(urls.get("photo"));
         if (urls.get("cedula") != null) v.setCedulaUrl(urls.get("cedula"));
         if (urls.get("insurance") != null) v.setInsuranceUrl(urls.get("insurance"));
@@ -76,13 +79,17 @@ public class VehicleService {
             if (req.year() < minYear) throw AppException.badRequest("Año de vehículo fuera de rango");
             v.setYear(req.year());
         }
+        if (req.plate() != null) v.setPlate(req.plate().toUpperCase());
         if (req.color() != null) v.setColor(req.color());
         if (req.doors() != null) v.setDoors(req.doors());
+        if (req.seats() != null) v.setSeats(req.seats());
         if (req.hasAc() != null) v.setHasAc(req.hasAc());
         if (req.hasSeatbelts() != null) v.setHasSeatbelts(req.hasSeatbelts());
         if (req.insurancePolicy() != null) v.setInsurancePolicy(req.insurancePolicy());
-        if (req.insuranceExpiresAt() != null) v.setInsuranceExpiresAt(Instant.parse(req.insuranceExpiresAt() + "T00:00:00Z"));
-        if (req.vtvExpiresAt() != null) v.setVtvExpiresAt(Instant.parse(req.vtvExpiresAt() + "T00:00:00Z"));
+        Instant insuranceExpiresAt = parseFutureDate(req.insuranceExpiresAt(), "Vencimiento de seguro");
+        Instant vtvExpiresAt = parseFutureDate(req.vtvExpiresAt(), "Vencimiento de VTV");
+        if (insuranceExpiresAt != null) v.setInsuranceExpiresAt(insuranceExpiresAt);
+        if (vtvExpiresAt != null) v.setVtvExpiresAt(vtvExpiresAt);
 
         Map<String, String> urls = uploadVehicleFiles(ownerId, files);
         if (urls.get("photo") != null) v.setPhotoUrl(urls.get("photo"));
@@ -91,6 +98,15 @@ public class VehicleService {
         if (urls.get("vtv") != null) v.setVtvUrl(urls.get("vtv"));
 
         return VehicleResponse.from(vehicleRepository.save(v));
+    }
+
+    private Instant parseFutureDate(String isoDate, String fieldLabel) {
+        if (isoDate == null) return null;
+        Instant instant = Instant.parse(isoDate + "T00:00:00Z");
+        if (!instant.isAfter(Instant.now())) {
+            throw AppException.badRequest(fieldLabel + " debe ser una fecha futura");
+        }
+        return instant;
     }
 
     private Map<String, String> uploadVehicleFiles(UUID driverId, Map<String, MultipartFile> files) {

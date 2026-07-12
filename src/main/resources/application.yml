@@ -30,6 +30,8 @@ spring:
 
 server:
   port: 8085
+  tomcat:
+    max-part-count: 30
 
 jwt:
   secret: ${JWT_SECRET:dev-secret-change-in-production-32x}
@@ -46,3 +48,9 @@ aws:
 
 price:
   per-km-ars: ${PRICE_PER_KM_ARS:150}
+
+google:
+  places:
+    api-key: ${GOOGLE_MAPS_KEY:}
+
+environment: ${ENVIRONMENT:}

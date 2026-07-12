@@ -60,7 +60,6 @@ public class DriverService {
         User user = findOrThrow(userId);
         user.setDni(req.dni());
         user.setBirthDate(birth.atStartOfDay().toInstant(ZoneOffset.UTC));
-        user.setLicenseNumber(req.licenseNumber());
         user.setLicenseCategory(req.licenseCategory());
         if (dniUrl != null)  user.setDniPhotoUrl(dniUrl);
         if (licUrl != null)  user.setLicensePhotoUrl(licUrl);

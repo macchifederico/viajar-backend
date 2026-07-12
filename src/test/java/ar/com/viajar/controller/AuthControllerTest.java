@@ -36,7 +36,7 @@ class AuthControllerTest {
     private UserResponse mockUser() {
         return new UserResponse(UUID.randomUUID(), "Test User", "test@email.com",
                 "+5491100000000", UserRole.passenger, null, 0, 0,
-                null, Instant.now(), null, null, null, null, null);
+                null, Instant.now(), null, null, null, null);
     }
 
     @Test

@@ -30,7 +30,7 @@ algo durante la implementación (la spec se corrige, no se abandona).
 | 5 | Auth mobile | ✅ |
 | — | Onboarding de conductor (mobile + backend) | ✅ (validación de documentos pendiente, ver [producto.md](producto.md#validaciones-de-documentos--onboarding-conductor-pendiente-próximas-iteraciones)) |
 | — | Migración backend Node.js → Java/Spring Boot | ✅ |
-| 6 | Viajes backend (Trip, Stop, TripSegment) | ⏳ |
+| 6 | Viajes backend (Trip, Stop, TripSegment) | ✅ |
 | 7 | Búsqueda + reservas (Booking) | ⏳ |
 | 8 | WebSocket tracking GPS en tiempo real | ⏳ |
 | 9 | Pagos (Mercado Pago escrow) | ⏳ |
@@ -60,7 +60,10 @@ algo durante la implementación (la spec se corrige, no se abandona).
   casos de negocio esperados.
 - Autenticación: JWT stateless. `JwtFilter` valida el `Authorization: Bearer <token>` y setea el
   `UUID` del usuario como principal (`@AuthenticationPrincipal UUID userId` en los controllers).
-  No hay manejo de roles en Spring Security todavía (ver [Brecha: autorización por rol](#brecha-autorización-por-rol-⏳)).
+  El rol (`UserRole`) va embebido como claim en el access token y se traduce a `GrantedAuthority`
+  (`ROLE_DRIVER`, `ROLE_PASSENGER`, `ROLE_BOTH`) en `JwtFilter`; los endpoints que lo requieren usan
+  `@PreAuthorize("hasAnyRole(...)")` (`@EnableMethodSecurity` en `SecurityConfig`). Ver
+  [decisión de autorización por rol](#decisión-autorización-por-rol-✅).
 
 ## Manejo de errores — catálogo de códigos
 
@@ -70,7 +73,7 @@ algo durante la implementación (la spec se corrige, no se abandona).
 | `UNAUTHORIZED` | 401 | Token ausente/inválido/expirado, o credenciales incorrectas en login |
 | `FORBIDDEN` | 403 | Usuario autenticado pero sin permiso sobre el recurso (ej. editar vehículo ajeno) |
 | `NOT_FOUND` | 404 | Recurso inexistente |
-| `CONFLICT` | 409 | Violación de constraint único (email/phone/plate duplicado) o `AppException.conflict` |
+| `CONFLICT` | 409 | Violación de constraint único (email/phone/dni/plate duplicado, mensaje diferenciado por constraint en `GlobalExceptionHandler`) o `AppException.conflict` |
 | `INTERNAL_ERROR` | 500 | Excepción no controlada (loggeada, mensaje genérico al cliente) |
 
 Al agregar un endpoint nuevo: reusar estos códigos siempre que aplique. Solo agregar un código
@@ -96,10 +99,9 @@ conductor quedan `null` hasta iniciar el onboarding.
 | ratingCount | int | default 0 |
 | verifiedAt | timestamp? | verificación OTP |
 | createdAt | timestamp | inmutable |
-| dni | string? | unique, onboarding conductor |
+| dni | string? | unique, onboarding conductor. Validado 7-8 dígitos numéricos |
 | birthDate | timestamp? | onboarding conductor |
 | dniPhotoUrl, licensePhotoUrl, criminalRecordUrl | string? | S3, onboarding conductor |
-| licenseNumber | string? | unique |
 | licenseCategory | string? | ej. `D1`–`D4` |
 | driverStatus | enum `pending_documents\|under_review\|approved\|rejected`? | estado del onboarding |
 
@@ -112,38 +114,41 @@ Tabla `vehicles`. Un conductor puede tener múltiples vehículos (`driverId` FK,
 | driverId | UUID (text) | FK → users |
 | brand, model, color | string | — |
 | year | int | — |
-| plate | string | unique |
+| plate | string | unique. Validada formato viejo (`AAA111`) o Mercosur (`AA111AA`), normalizada a mayúsculas |
 | photoUrl | string? | S3 |
 | verifiedAt | timestamp? | — |
 | cedulaUrl, insuranceUrl, vtvUrl | string? | S3 |
 | insurancePolicy | string? | — |
-| insuranceExpiresAt, vtvExpiresAt | timestamp? | ⚠️ ver [bug conocido](producto.md#seguro-vigente-insurancefile--insuranceexpiresat) de parseo de fecha |
-| doors | int | default 4 |
+| insuranceExpiresAt, vtvExpiresAt | timestamp? | Validadas como fecha futura al crear el vehículo (`400 BAD_REQUEST` si no) |
+| doors | int | requerido, 2-4. El conductor elige libremente, sin default forzado |
+| seats | int | requerido, 1-8. Capacidad de pasajeros (distinto de `doors`); es la fuente de `Trip.totalSeats` |
 | hasAc | boolean | default false |
 | hasSeatbelts | boolean | default true |
 
-### Trip ⏳ (Fase 6)
-Tabla `trips`.
+### Trip ✅ (Fase 6)
+Tabla `trips`. Ya existía físicamente en la base (migración Prisma original del backend Node.js,
+nunca se le había agregado código); `vehicleId` se agregó recién con la Fase 6 (no estaba en la
+tabla heredada).
 
 | Campo | Tipo | Notas |
 |-------|------|-------|
 | id | UUID (text) | PK |
 | driverId | UUID (text) | FK → users |
+| vehicleId | UUID (text) | FK → vehicles. Fija `totalSeats` al crear el viaje (snapshot, no join en vivo) |
 | originName, destinationName | string | — |
-| originLat, originLng, destinationLat, destinationLng | double | PostGIS: guardar como columnas `Float`/`double` + índice `geography` calculado, no tipo PostGIS mapeado por Hibernate (ver nota abajo) |
+| originLat, originLng, destinationLat, destinationLng | double | PostGIS: guardar como columnas `Float`/`double` + índice `geography` calculado, no tipo PostGIS mapeado por Hibernate (ver nota abajo). El índice geography y las queries `ST_*` todavía no existen — llegan en Fase 7 (Búsqueda) |
 | departureAt | timestamp | — |
-| totalSeats | int | capacidad del vehículo asignado |
+| totalSeats | int | = `vehicle.seats` al momento de crear el trip |
 | availableSeats | int | ≤ totalSeats |
 | status | enum `draft\|published\|in_progress\|completed\|cancelled` | default `draft` |
-| vehicleId | UUID (text) | FK → vehicles (agregar; no está en `producto.md` pero es necesario para conocer `totalSeats` y mostrar el vehículo en la búsqueda) |
 | createdAt | timestamp | inmutable |
 
 **Nota PostGIS:** las queries geoespaciales (`ST_DWithin`, `ST_Point`) van en SQL nativo
 (`@Query(nativeQuery = true)` o `EntityManager.createNativeQuery`), no mapeadas como tipo de
 columna en la entidad JPA — así se hizo en el backend Node.js con Prisma y se mantiene el criterio.
 
-### Stop ⏳ (Fase 6)
-Tabla `stops`. Paradas intermedias de un viaje, en orden.
+### Stop ✅ (Fase 6)
+Tabla `stops`. Paradas intermedias de un viaje, en orden. Ya existía en la tabla heredada de Prisma.
 
 | Campo | Tipo | Notas |
 |-------|------|-------|
@@ -151,11 +156,12 @@ Tabla `stops`. Paradas intermedias de un viaje, en orden.
 | tripId | UUID (text) | FK → trips |
 | name | string | — |
 | lat, lng | double | — |
-| order | int | posición en la ruta (0 = origen) |
+| order | int | posición declarada por el request (no tiene que ser contigua; solo se valida que no haya valores duplicados — ver `POST /trips`) |
 | estimatedArrivalAt | timestamp | — |
 
-### TripSegment ⏳ (Fase 6)
+### TripSegment ✅ (Fase 6)
 Tabla `trip_segments`. Tramos entre paradas consecutivas (incluye origen/destino como límites).
+Ya existía en la tabla heredada de Prisma.
 
 | Campo | Tipo | Notas |
 |-------|------|-------|
@@ -163,10 +169,10 @@ Tabla `trip_segments`. Tramos entre paradas consecutivas (incluye origen/destino
 | tripId | UUID (text) | FK → trips |
 | fromStopId | UUID (text)? | null = origen del viaje |
 | toStopId | UUID (text)? | null = destino del viaje |
-| distanceKm | double | calculado (Google Maps Distance Matrix o Haversine entre paradas) |
+| distanceKm | double | Haversine entre los dos puntos del tramo (`GeoUtils`); Google Maps Distance Matrix queda para más adelante |
 | suggestedPrice | decimal | `distanceKm * PRICE_PER_KM_ARS * factorZona` |
-| finalPrice | decimal | ajustado por conductor, rango `suggestedPrice * [0.70, 1.30]` |
-| order | int | — |
+| finalPrice | decimal | Hoy = `suggestedPrice` (todavía no existe el endpoint para que el conductor lo ajuste ±30%, ver "a definir" en `POST /trips`) |
+| order | int | secuencial; el tramo "recorrido completo" (ambos FKs null, solo cuando hay ≥1 parada intermedia) siempre tiene el último `order` |
 
 ### Booking ⏳ (Fase 7)
 Tabla `bookings`.
@@ -255,14 +261,14 @@ Auth requerida. Devuelve el mismo `UserResponse` con foco en campos de conductor
 Auth requerida. `multipart/form-data`. Envía/actualiza los datos de onboarding de conductor.
 **Request** (`DriverProfileRequest` + archivos):
 ```
-dni: string (7-10 chars)
-birthDate: string "YYYY-MM-DD"
-licenseNumber: string
+dni: string (7-8 dígitos numéricos)
+birthDate: string "YYYY-MM-DD" (≥ 21 años)
 licenseCategory: string (regex D[1-4])
-dniPhoto, licensePhoto, criminalRecord: file (opcionales)
+dniPhoto, licensePhoto, criminalRecord: file (requeridos; jpg/png/pdf, máx 5MB)
 ```
 **Response 200** (`UserResponse`)
-**Pendiente:** validación real de contenido de los documentos — ver [producto.md](producto.md#validaciones-de-documentos--onboarding-conductor-pendiente-próximas-iteraciones). Hoy solo se valida que el archivo exista.
+**Errores:** `400 BAD_REQUEST` (validación de campo, archivo faltante/tipo inválido/tamaño excedido, menor de 21 años), `409 CONFLICT` (dni/email/teléfono/licencia duplicados, con mensaje diferenciado por constraint)
+**Pendiente:** validación real de contenido de los documentos (hoy solo se valida tipo/tamaño, no que el documento sea auténtico) — ver [producto.md](producto.md#validaciones-de-documentos--onboarding-conductor-pendiente-próximas-iteraciones).
 
 ### Vehicles ✅
 
@@ -273,31 +279,36 @@ Auth requerida. Lista los vehículos del usuario autenticado (`List<VehicleRespo
 Auth requerida. `multipart/form-data`.
 **Request** (`CreateVehicleRequest` + archivos):
 ```
-brand, model, plate, color: string (requeridos)
-year: int (requerido)
-doors: int (opcional, default 4)
+brand, model, plate, color: string (requeridos; plate formato AAA111 o AA111AA, normalizada a mayúsculas)
+year: int (requerido, máx 20 años de antigüedad)
+doors: int (requerido, 2-4)
+seats: int (requerido, 1-8)
 hasAc, hasSeatbelts: boolean (opcional)
 insurancePolicy: string (opcional)
-insuranceExpiresAt, vtvExpiresAt: string (opcional; ⚠️ sin validar formato — bug conocido)
-photo, cedula, insurance, vtv: file (opcionales)
+insuranceExpiresAt: string (opcional — sin input en el mobile; si se envía, se valida igual como fecha futura)
+vtvExpiresAt: string (requerido en `POST`; debe ser fecha futura — la VTV tiene que estar vigente)
+photo: file (opcional)
+cedula, insurance, vtv: file (requeridos en `POST`; jpg/png/pdf, máx 5MB)
 ```
 **Response 201** (`VehicleResponse`)
-**Errores:** `409 CONFLICT` (patente duplicada), `400 BAD_REQUEST` (fecha inválida → hoy produce `500`, es un bug a corregir, no comportamiento deseado)
+**Errores:** `409 CONFLICT` (patente duplicada, mensaje diferenciado), `400 BAD_REQUEST` (validación de campo, archivo faltante/tipo inválido/tamaño excedido, fecha de vencimiento no futura)
 
 #### PUT /vehicles/:id
 Auth requerida, solo el dueño (`driverId == userId`, verificar en `VehicleService`).
-Mismo request que `POST /vehicles`.
+Mismo request que `POST /vehicles`, pero `cedula`/`insurance`/`vtv` quedan opcionales (actualización
+parcial: si no se reenvía un archivo, se conserva el existente).
 **Errores:** `403 FORBIDDEN` (vehículo ajeno), `404 NOT_FOUND`
 
 ---
 
-### Trips ⏳ (Fase 6)
+### Trips ✅ (Fase 6)
 
 #### POST /trips
-Auth requerida, rol `driver` o `both` (ver [brecha de autorización](#brecha-autorización-por-rol-⏳)).
+Auth requerida, rol `driver` o `both` (`@PreAuthorize("hasAnyRole('DRIVER','BOTH')")`, ver
+[decisión de autorización por rol](#decisión-autorización-por-rol-✅)).
 Crea un viaje en estado `draft` con sus paradas y calcula los tramos sugeridos.
 
-**Request:**
+**Request** (`CreateTripRequest`, también usado por `PUT /trips/:id`):
 ```json
 {
   "vehicleId": "uuid",
@@ -309,38 +320,84 @@ Crea un viaje en estado `draft` con sus paradas y calcula los tramos sugeridos.
 }
 ```
 **Reglas de negocio:**
-- `availableSeats` ≤ capacidad del `Vehicle` referenciado (`totalSeats` del trip = capacidad del vehículo).
-- Al crear, generar automáticamente los `trip_segments` entre cada par de paradas consecutivas
-  (incluyendo origen y destino como límites) con `suggestedPrice` calculado.
-- Precio: `precio_tramo = distancia_km * PRICE_PER_KM_ARS * factor_zona` (`factor_zona`: `conurbano 1.0`,
-  `interurbano 1.2`, `caba 0.9` — a definir cómo se determina la zona de cada tramo, hoy no hay campo
-  para eso en el modelo; **pendiente de diseño** antes de implementar el cálculo real).
-- El precio del recorrido completo (origen→destino) debe ser menor que la suma de los tramos
-  individuales — aplicar un descuento al tramo full antes de persistir `suggestedPrice`.
+- `availableSeats` ≤ `vehicle.seats` (`400 BAD_REQUEST` si no); `totalSeats` del trip = `vehicle.seats`.
+- El vehículo debe pertenecer al conductor autenticado (`403 FORBIDDEN` si no, `404 NOT_FOUND` si no existe).
+- `departureAt` debe ser una fecha futura (`@Future`); `originLat/destinationLat` ∈ [-90, 90],
+  `originLng/destinationLng` ∈ [-180, 180] (mismo rango para cada `stop`).
+- Origen y destino no pueden ser el mismo punto (distancia Haversine < 50m → `400 BAD_REQUEST`).
+- `stops` se ordenan por su campo `order`; si hay valores duplicados → `400 BAD_REQUEST`. No hace
+  falta que sean contiguos, solo estrictamente distintos entre sí.
+- Al crear, se generan automáticamente los `trip_segments` entre cada par de puntos consecutivos
+  (origen → paradas en orden → destino) con `suggestedPrice` calculado.
+- Precio: `precio_tramo = distancia_km * PRICE_PER_KM_ARS * factor_zona.factor()`. `distancia_km` se
+  calcula con Haversine (`GeoUtils`); Google Maps Distance Matrix queda pendiente para una iteración
+  futura. `factor_zona` sale de `ZonaResolver` — **hoy `StubZonaResolver` siempre devuelve `conurbano`
+  (factor `1.0`)**, es un placeholder a propósito porque todavía no existe una definición geográfica
+  real de conurbano/interurbano/CABA (**a definir**: polígonos, reverse-geocoding o bounding boxes).
+- Si hay ≥1 parada intermedia, se agrega un `trip_segment` adicional "recorrido completo"
+  (`fromStopId`/`toStopId` ambos null) cuyo `suggestedPrice` es el de la suma de los tramos
+  individuales con un descuento (`FULL_TRIP_DISCOUNT = 0.85`, con un clamp defensivo a `0.95` de esa
+  suma) — así el precio del recorrido completo siempre es menor a la suma de los tramos. Sin paradas
+  intermedias, el único segmento (origen→destino directo) ya cumple ese rol y no se duplica.
+- `finalPrice` = `suggestedPrice` al crear. El ajuste ±30% por tramo se hace después, vía
+  `PATCH /trips/:id/segments` (ver más abajo), no en la creación.
+- `TripSegment.finalPrice` es el precio **por pasajero/asiento reservado** de ese tramo, no un total
+  del viaje — cada pasajero paga el `finalPrice` completo del tramo que reserva (no hay división ni
+  multiplicación por cantidad de pasajeros en el cálculo).
 
-**Response 201:** Trip con sus stops y segments (contrato a definir junto con el DTO de respuesta al implementar).
-**Errores:** `400 BAD_REQUEST` (paradas fuera de orden, seats > capacidad), `403 FORBIDDEN` (vehículo ajeno), `404 NOT_FOUND` (vehículo inexistente)
+**Response 201** (`TripResponse`): el trip con sus `stops` y `segments` completos.
+**Errores:** `400 BAD_REQUEST` (paradas con `order` duplicado, `availableSeats` > capacidad, origen=destino, campos fuera de rango), `403 FORBIDDEN` (vehículo ajeno), `404 NOT_FOUND` (vehículo inexistente)
 
 #### PUT /trips/:id
 Auth requerida, solo el conductor dueño, **solo si `status == draft`**.
-Mismo shape que `POST /trips`. Recalcula `trip_segments` si cambian paradas/precio.
-**Errores:** `409 CONFLICT` si el viaje ya está `published` o en un estado posterior (no se edita, se cancela y crea uno nuevo).
+Mismo shape que `POST /trips`. Borra y regenera `stops`/`trip_segments` desde cero con las mismas
+reglas de creación. **Importante:** esto resetea cualquier ajuste manual de precio hecho vía
+`PATCH /trips/:id/segments` (los tramos nuevos no tienen relación con los viejos ajustados) — es
+comportamiento esperado, documentado también como comentario en `TripService.update()`.
+**Errores:** `409 CONFLICT` si el viaje ya está `published` o en un estado posterior (no se edita, se cancela y crea uno nuevo), `403 FORBIDDEN` (dueño distinto), `404 NOT_FOUND`.
+
+#### PATCH /trips/:id/segments
+Auth requerida, rol `driver`/`both`, solo el conductor dueño, **solo si `status == draft`**.
+Ajusta el `finalPrice` de uno o más tramos ya generados, sin recalcular `suggestedPrice` ni tocar el
+resto del trip/stops.
+
+**Request** (`AdjustSegmentPricesRequest`):
+```json
+{ "segments": [{ "segmentId": "uuid", "finalPrice": 0.0 }] }
+```
+**Reglas de negocio:**
+- `finalPrice` debe ser positivo (`400 BAD_REQUEST` si no). **Por ahora, sin límite de rango**: el
+  margen ±30% sobre `suggestedPrice` que describe `producto.md` todavía no se aplica — el conductor
+  puede poner el precio que quiera mientras el trip esté en `draft`. Si se decide reintroducir el
+  margen más adelante, es un chequeo acotado a este método (`TripService.adjustSegmentPrices`).
+- `segmentId` debe pertenecer al trip del path (`400 BAD_REQUEST` si no).
+
+**Response 200** (`TripResponse`): el trip actualizado con los `finalPrice` nuevos.
+**Errores:** `400 BAD_REQUEST` (precio fuera de rango, segmento ajeno al trip), `403 FORBIDDEN` (dueño distinto), `404 NOT_FOUND`, `409 CONFLICT` (trip no está en `draft`).
 
 #### POST /trips/:id/publish
 Auth requerida, solo el dueño, `status == draft` → `published`.
-**Reglas:** debe tener al menos origen, destino y `availableSeats ≥ 1`.
-**Errores:** `409 CONFLICT` si no está en `draft`.
+**Reglas:** `availableSeats ≥ 1` (ya se garantiza en la creación, pero se revalida).
+**Errores:** `409 CONFLICT` si no está en `draft`, `403 FORBIDDEN` (dueño distinto), `404 NOT_FOUND`.
 
 #### GET /trips/mine
-Auth requerida. Lista los viajes del conductor autenticado (todos los estados).
+Auth requerida. Lista los viajes del conductor autenticado (todos los estados), cada uno con sus `stops`/`segments`.
 
 #### GET /trips/:id
 Auth: público si el viaje está `published` o posterior; el dueño puede verlo en cualquier estado.
-Detalle completo con `stops`, `trip_segments`, y reservas (`bookings`) solo visibles para el dueño.
+**Decisión:** si el viaje está en `draft` y quien pide no es el dueño (incluido acceso sin token),
+responde `404 NOT_FOUND` (no `403`) para no filtrar la existencia de viajes en borrador.
+Todavía no expone `bookings` (no existe la entidad hasta Fase 7).
 
 #### DELETE /trips/:id
 Auth requerida, solo el dueño. Cancela (`status = cancelled`), no borra físicamente.
-**Reglas:** si hay `bookings` con `paymentStatus == held`, disparar reembolso (ver [Pagos](#pagos-mercado-pago---escrow--fase-9)) solo si faltan +2hs para `departureAt`; si faltan menos, **política a definir con el usuario** antes de implementar (hoy `producto.md` solo define la regla de reembolso para cancelación del conductor con +2hs de anticipación, no qué pasa si cancela con menos).
+**Implementado en Fase 6:** solo la transición de estado + chequeo de ownership/estado terminal
+(`409 CONFLICT` si ya está `completed`/`cancelled`).
+**Pendiente para Fase 7** (hay un TODO explícito en `TripService.cancel`): si hay `bookings` con
+`paymentStatus == held`, disparar reembolso (ver [Pagos](#pagos-mercado-pago---escrow--fase-9)) solo
+si faltan +2hs para `departureAt`; si faltan menos, **política a definir con el usuario** antes de
+implementar (hoy `producto.md` solo define la regla de reembolso para cancelación del conductor con
++2hs de anticipación, no qué pasa si cancela con menos).
 
 ### Búsqueda de viajes ⏳ (Fase 7)
 
@@ -438,13 +495,24 @@ y actualiza `Booking.paymentStatus` / `mpPaymentId` en consecuencia.
 
 ---
 
-## Brecha: autorización por rol ⏳
+## Decisión: autorización por rol ✅
 
-Hoy `SecurityConfig` solo distingue autenticado/no autenticado; no hay `@PreAuthorize` ni
-chequeo de `UserRole` en ningún controller. Los endpoints de Fase 6+ (crear viaje, etc.)
-requieren rol `driver`/`both`. Antes de implementarlos, decidir el mecanismo: rol embebido
-en el JWT (evita un query extra por request) vs. lookup a `UserRepository` en cada request.
-Documentar la decisión acá cuando se tome.
+Se optó por **embeber el rol en el JWT de acceso** (claim `role`) en vez de hacer lookup a
+`UserRepository` en cada request — el rol se setea una única vez en `AuthService.register` y hoy
+ningún endpoint lo muta después, así que el riesgo de "rol stale" es mínimo, y evita un query extra
+por request (importante de cara al WebSocket de Fase 8, de alta frecuencia).
+
+- `JwtUtil.generateAccessToken(UUID userId, UserRole role)` agrega el claim `role`.
+- `JwtFilter` lo lee (`extractRoleFromAccess`) y arma `GrantedAuthority` (`ROLE_DRIVER`,
+  `ROLE_PASSENGER`, `ROLE_BOTH`).
+- `SecurityConfig` tiene `@EnableMethodSecurity`; los controllers usan
+  `@PreAuthorize("hasAnyRole(...)")` (ver `TripController.create`).
+- `AuthService.refresh` **relee el rol actual desde `UserRepository`** al regenerar el access token
+  — así, si en el futuro algo llega a mutar el rol de un usuario, la ventana de staleness queda
+  acotada al ciclo de refresh (15 min hoy, `jwt.access-expiration-ms`) en vez de persistir hasta el
+  logout.
+- El chequeo de **ownership** (vehículo/trip ajeno) sigue siendo explícito en el Service
+  (`AppException.forbidden()`) — el rol solo gatea "puede crear viajes", no reemplaza esa validación.
 
 ## Cómo agregar una spec nueva
 

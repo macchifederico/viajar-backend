@@ -1,5 +1,6 @@
 package ar.com.viajar.security;
 
+import ar.com.viajar.domain.enums.UserRole;
 import ar.com.viajar.exception.AppException;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -32,8 +33,15 @@ public class JwtUtil {
         this.refreshExpirationMs = refreshExpirationMs;
     }
 
-    public String generateAccessToken(UUID userId) {
-        return buildToken(userId.toString(), accessKey, accessExpirationMs);
+    public String generateAccessToken(UUID userId, UserRole role) {
+        long now = System.currentTimeMillis();
+        return Jwts.builder()
+                .claim("userId", userId.toString())
+                .claim("role", role.name())
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + accessExpirationMs))
+                .signWith(accessKey)
+                .compact();
     }
 
     public String generateRefreshToken(UUID userId) {
@@ -46,6 +54,20 @@ public class JwtUtil {
 
     public UUID extractUserIdFromRefresh(String token) {
         return extractUserId(token, refreshKey);
+    }
+
+    public UserRole extractRoleFromAccess(String token) {
+        try {
+            String role = Jwts.parser()
+                    .verifyWith(accessKey)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload()
+                    .get("role", String.class);
+            return UserRole.valueOf(role);
+        } catch (JwtException | IllegalArgumentException e) {
+            throw AppException.unauthorized("Token inválido o expirado");
+        }
     }
 
     private String buildToken(String userId, SecretKey key, long expirationMs) {

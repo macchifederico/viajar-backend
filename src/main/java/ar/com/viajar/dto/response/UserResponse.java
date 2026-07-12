@@ -21,7 +21,6 @@ public record UserResponse(
         DriverStatus driverStatus,
         String dni,
         Instant birthDate,
-        String licenseNumber,
         String licenseCategory
 ) {
     public static UserResponse from(User u) {
@@ -30,7 +29,7 @@ public record UserResponse(
                 u.getRole(), u.getAvatarUrl(), u.getRatingAvg(), u.getRatingCount(),
                 u.getVerifiedAt(), u.getCreatedAt(),
                 u.getDriverStatus(), u.getDni(), u.getBirthDate(),
-                u.getLicenseNumber(), u.getLicenseCategory()
+                u.getLicenseCategory()
         );
     }
 }
