@@ -1,17 +1,23 @@
 package ar.com.viajar.service;
 
+import ar.com.viajar.domain.Stop;
 import ar.com.viajar.domain.Trip;
 import ar.com.viajar.domain.TripSegment;
+import ar.com.viajar.domain.User;
 import ar.com.viajar.domain.Vehicle;
+import ar.com.viajar.domain.enums.DriverStatus;
 import ar.com.viajar.domain.enums.TripStatus;
 import ar.com.viajar.dto.request.AdjustSegmentPricesRequest;
 import ar.com.viajar.dto.request.CreateTripRequest;
 import ar.com.viajar.dto.request.StopRequest;
 import ar.com.viajar.dto.request.TripSegmentPriceAdjustment;
+import ar.com.viajar.dto.response.TripSearchResult;
 import ar.com.viajar.exception.AppException;
+import ar.com.viajar.repository.BookingRepository;
 import ar.com.viajar.repository.StopRepository;
 import ar.com.viajar.repository.TripRepository;
 import ar.com.viajar.repository.TripSegmentRepository;
+import ar.com.viajar.repository.UserRepository;
 import ar.com.viajar.repository.VehicleRepository;
 import ar.com.viajar.service.pricing.Zona;
 import ar.com.viajar.service.pricing.ZonaResolver;
@@ -24,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,6 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,6 +49,8 @@ class TripServiceTest {
     @Mock StopRepository stopRepository;
     @Mock TripSegmentRepository tripSegmentRepository;
     @Mock VehicleRepository vehicleRepository;
+    @Mock UserRepository userRepository;
+    @Mock BookingRepository bookingRepository;
     @Mock ZonaResolver zonaResolver;
 
     TripService tripService;
@@ -49,7 +59,7 @@ class TripServiceTest {
 
     @BeforeEach
     void setUp() {
-        tripService = new TripService(tripRepository, stopRepository, tripSegmentRepository, vehicleRepository, zonaResolver);
+        tripService = new TripService(tripRepository, stopRepository, tripSegmentRepository, vehicleRepository, userRepository, bookingRepository, zonaResolver);
         ReflectionTestUtils.setField(tripService, "pricePerKmArs", 150.0);
         driverId = UUID.randomUUID();
 
@@ -283,5 +293,195 @@ class TripServiceTest {
                 new AdjustSegmentPricesRequest(List.of(new TripSegmentPriceAdjustment(UUID.randomUUID(), 1000.0)))));
 
         assertEquals(409, ex.getStatus());
+    }
+
+    // --- publish() ---
+
+    @Test
+    void publish_approvedDriver_publishes() {
+        UUID tripId = UUID.randomUUID();
+        Trip trip = draftTrip(tripId, driverId);
+        trip.setAvailableSeats(2);
+        when(tripRepository.findById(tripId)).thenReturn(Optional.of(trip));
+        when(userRepository.findById(driverId)).thenReturn(Optional.of(approvedDriver(driverId)));
+
+        tripService.publish(tripId, driverId);
+
+        assertEquals(TripStatus.published, trip.getStatus());
+    }
+
+    @Test
+    void publish_driverNotApproved_throwsConflict() {
+        UUID tripId = UUID.randomUUID();
+        Trip trip = draftTrip(tripId, driverId);
+        trip.setAvailableSeats(2);
+        when(tripRepository.findById(tripId)).thenReturn(Optional.of(trip));
+        User underReview = approvedDriver(driverId);
+        underReview.setDriverStatus(DriverStatus.under_review);
+        when(userRepository.findById(driverId)).thenReturn(Optional.of(underReview));
+
+        AppException ex = assertThrows(AppException.class, () -> tripService.publish(tripId, driverId));
+
+        assertEquals(409, ex.getStatus());
+        assertEquals(TripStatus.draft, trip.getStatus());
+    }
+
+    // --- search() ---
+
+    private static final double ORIGIN_LAT = -34.6083, ORIGIN_LNG = -58.3712; // Once
+    private static final double STOP_A_LAT = -34.65, STOP_A_LNG = -58.38;
+    private static final double STOP_B_LAT = -34.75, STOP_B_LNG = -58.20;
+    private static final double DEST_LAT = -34.9214, DEST_LNG = -57.9544; // La Plata
+    private static final double FAR_LAT = 10.0, FAR_LNG = 10.0;
+
+    private User approvedDriver(UUID id) {
+        User u = new User();
+        u.setId(id);
+        u.setName("Juan Conductor");
+        u.setDriverStatus(DriverStatus.approved);
+        return u;
+    }
+
+    private Trip publishedTripWithTwoStops(UUID id, Instant departureAt, int availableSeats) {
+        Trip trip = new Trip();
+        trip.setId(id);
+        trip.setDriverId(driverId);
+        trip.setVehicleId(UUID.randomUUID());
+        trip.setOriginName("Once");
+        trip.setOriginLat(ORIGIN_LAT);
+        trip.setOriginLng(ORIGIN_LNG);
+        trip.setDestinationName("La Plata");
+        trip.setDestinationLat(DEST_LAT);
+        trip.setDestinationLng(DEST_LNG);
+        trip.setDepartureAt(departureAt);
+        trip.setAvailableSeats(availableSeats);
+        trip.setStatus(TripStatus.published);
+        lenient().when(userRepository.findById(driverId)).thenReturn(Optional.of(approvedDriver(driverId)));
+        return trip;
+    }
+
+    private Stop stop(String name, double lat, double lng, int order) {
+        Stop s = new Stop();
+        s.setId(UUID.randomUUID());
+        s.setName(name);
+        s.setLat(lat);
+        s.setLng(lng);
+        s.setOrder(order);
+        return s;
+    }
+
+    private TripSegment leg(int order, UUID fromStopId, UUID toStopId, double finalPrice) {
+        TripSegment s = new TripSegment();
+        s.setId(UUID.randomUUID());
+        s.setFromStopId(fromStopId);
+        s.setToStopId(toStopId);
+        s.setFinalPrice(finalPrice);
+        s.setOrder(order);
+        return s;
+    }
+
+    /** Arma un trip publicado Once -> ParadaA -> ParadaB -> La Plata con sus 4 segments (3 tramos + 1 completo). */
+    private Trip setUpTwoStopTrip() {
+        UUID tripId = UUID.randomUUID();
+        Trip trip = publishedTripWithTwoStops(tripId, Instant.now().plus(2, ChronoUnit.DAYS), 3);
+        Stop stopA = stop("Parada A", STOP_A_LAT, STOP_A_LNG, 1);
+        Stop stopB = stop("Parada B", STOP_B_LAT, STOP_B_LNG, 2);
+        when(stopRepository.findAllByTripIdOrderByOrder(tripId)).thenReturn(List.of(stopA, stopB));
+
+        List<TripSegment> segments = List.of(
+                leg(0, null, stopA.getId(), 500.0),
+                leg(1, stopA.getId(), stopB.getId(), 300.0),
+                leg(2, stopB.getId(), null, 400.0),
+                leg(3, null, null, 900.0) // recorrido completo, descontado (< 1200 = suma de tramos)
+        );
+        lenient().when(tripSegmentRepository.findAllByTripIdOrderByOrder(tripId)).thenReturn(segments);
+        return trip;
+    }
+
+    @Test
+    void search_matchesIntermediateStop_returnsLastLegPriceAsMinPrice() {
+        Trip trip = setUpTwoStopTrip();
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any())).thenReturn(List.of(trip));
+
+        List<TripSearchResult> results = tripService.search(STOP_B_LAT, STOP_B_LNG, null);
+
+        assertEquals(1, results.size());
+        TripSearchResult result = results.get(0);
+        assertEquals(300.0, result.minPrice()); // último tramo antes de Parada B: StopA->StopB
+        assertEquals(3, result.availableSeats());
+        assertEquals("Parada B", result.matchedToName());
+    }
+
+    @Test
+    void search_matchesFinalDestination_returnsLastLegPriceNotFullDiscount() {
+        Trip trip = setUpTwoStopTrip();
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any())).thenReturn(List.of(trip));
+
+        List<TripSearchResult> results = tripService.search(DEST_LAT, DEST_LNG, null);
+
+        assertEquals(1, results.size());
+        // Último tramo antes del destino final: StopB->Destino (400), no el tramo completo con descuento (900).
+        assertEquals(400.0, results.get(0).minPrice());
+        assertNull(results.get(0).toStopId());
+    }
+
+    @Test
+    void search_pointTooFar_noMatch() {
+        Trip trip = setUpTwoStopTrip();
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any())).thenReturn(List.of(trip));
+
+        List<TripSearchResult> results = tripService.search(FAR_LAT, FAR_LNG, null);
+
+        assertTrue(results.isEmpty());
+    }
+
+    @Test
+    void search_matchAtTripOrigin_noMatch() {
+        Trip trip = setUpTwoStopTrip();
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any())).thenReturn(List.of(trip));
+
+        // Nadie busca "llegar" al punto donde arranca el conductor: el origen no cuenta como destino válido.
+        List<TripSearchResult> results = tripService.search(ORIGIN_LAT, ORIGIN_LNG, null);
+
+        assertTrue(results.isEmpty());
+    }
+
+    @Test
+    void search_queriesOnlyPublishedTripsWithFutureDeparture() {
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any())).thenReturn(List.of());
+
+        Instant before = Instant.now();
+        tripService.search(DEST_LAT, DEST_LNG, null);
+
+        ArgumentCaptor<Instant> afterCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(tripRepository).findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), afterCaptor.capture());
+        assertFalse(afterCaptor.getValue().isBefore(before));
+    }
+
+    @Test
+    void search_dateFilter_excludesTripsOutsideThatDay() {
+        Trip sameDay = setUpTwoStopTrip();
+        Trip nextDay = publishedTripWithTwoStops(UUID.randomUUID(), sameDay.getDepartureAt().plus(1, ChronoUnit.DAYS), 2);
+        // nextDay queda afuera del recorte por día antes de llegar a matchear stops/segments.
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any()))
+                .thenReturn(List.of(sameDay, nextDay));
+
+        List<TripSearchResult> results = tripService.search(DEST_LAT, DEST_LNG, sameDay.getDepartureAt());
+
+        assertEquals(1, results.size());
+        assertEquals(sameDay.getId(), results.get(0).tripId());
+    }
+
+    @Test
+    void search_driverNotApproved_excludesTrip() {
+        Trip trip = setUpTwoStopTrip();
+        User underReview = approvedDriver(driverId);
+        underReview.setDriverStatus(DriverStatus.under_review);
+        when(userRepository.findById(driverId)).thenReturn(Optional.of(underReview));
+        when(tripRepository.findAllByStatusAndDepartureAtAfter(eq(TripStatus.published), any())).thenReturn(List.of(trip));
+
+        List<TripSearchResult> results = tripService.search(DEST_LAT, DEST_LNG, null);
+
+        assertTrue(results.isEmpty());
     }
 }

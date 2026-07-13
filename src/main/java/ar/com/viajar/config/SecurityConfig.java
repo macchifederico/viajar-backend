@@ -42,8 +42,9 @@ public class SecurityConfig {
                         .requestMatchers("/auth/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/files/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/users/{id}").permitAll()
-                        // Debe ir antes que /trips/{id}: si no, ese patrón matchea "mine" como {id} y lo abre sin auth.
+                        // Deben ir antes que /trips/{id}: si no, ese patrón matchea "mine"/"search" como {id}.
                         .requestMatchers(HttpMethod.GET, "/trips/mine").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/trips/search").permitAll()
                         .requestMatchers(HttpMethod.GET, "/trips/{id}").permitAll()
                         .requestMatchers("/share/**").permitAll()
                         .anyRequest().authenticated()

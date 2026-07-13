@@ -23,7 +23,6 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -51,7 +50,7 @@ class TripControllerTest {
                 "Once", -34.6083, -58.3712,
                 "La Plata", -34.9214, -57.9544,
                 Instant.parse("2026-08-01T12:00:00Z"), 4, 4,
-                TripStatus.draft, Instant.now(), List.of(), List.of()
+                TripStatus.draft, Instant.now(), List.of(), List.of(), List.of()
         );
     }
 

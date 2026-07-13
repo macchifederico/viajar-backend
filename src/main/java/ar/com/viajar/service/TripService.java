@@ -1,29 +1,42 @@
 package ar.com.viajar.service;
 
+import ar.com.viajar.domain.Booking;
 import ar.com.viajar.domain.Stop;
 import ar.com.viajar.domain.Trip;
 import ar.com.viajar.domain.TripSegment;
+import ar.com.viajar.domain.User;
 import ar.com.viajar.domain.Vehicle;
+import ar.com.viajar.domain.enums.BookingStatus;
+import ar.com.viajar.domain.enums.DriverStatus;
 import ar.com.viajar.domain.enums.TripStatus;
 import ar.com.viajar.dto.request.AdjustSegmentPricesRequest;
 import ar.com.viajar.dto.request.CreateTripRequest;
 import ar.com.viajar.dto.request.StopRequest;
 import ar.com.viajar.dto.request.TripSegmentPriceAdjustment;
+import ar.com.viajar.dto.response.BookingSummaryResponse;
 import ar.com.viajar.dto.response.StopResponse;
 import ar.com.viajar.dto.response.TripResponse;
+import ar.com.viajar.dto.response.TripSearchResult;
 import ar.com.viajar.dto.response.TripSegmentResponse;
 import ar.com.viajar.exception.AppException;
+import ar.com.viajar.repository.BookingRepository;
 import ar.com.viajar.repository.StopRepository;
 import ar.com.viajar.repository.TripRepository;
 import ar.com.viajar.repository.TripSegmentRepository;
+import ar.com.viajar.repository.UserRepository;
 import ar.com.viajar.repository.VehicleRepository;
 import ar.com.viajar.service.pricing.GeoUtils;
+import ar.com.viajar.service.pricing.RouteBuilder;
+import ar.com.viajar.service.pricing.RoutePricing;
 import ar.com.viajar.service.pricing.ZonaResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -42,10 +55,15 @@ public class TripService {
     /** Debajo de esta distancia, origen y destino se consideran el mismo punto. */
     private static final double MIN_ROUTE_DISTANCE_KM = 0.05;
 
+    /** Radio de matcheo de la búsqueda: un punto pedido "hace match" con una parada si cae dentro. */
+    private static final double SEARCH_MATCH_RADIUS_KM = 0.8;
+
     private final TripRepository tripRepository;
     private final StopRepository stopRepository;
     private final TripSegmentRepository tripSegmentRepository;
     private final VehicleRepository vehicleRepository;
+    private final UserRepository userRepository;
+    private final BookingRepository bookingRepository;
     private final ZonaResolver zonaResolver;
 
     @Value("${price.per-km-ars}")
@@ -100,6 +118,10 @@ public class TripService {
         if (trip.getAvailableSeats() < 1) {
             throw AppException.badRequest("Debe haber al menos 1 asiento disponible para publicar");
         }
+        User driver = userRepository.findById(driverId).orElseThrow(() -> AppException.notFound("Conductor no encontrado"));
+        if (driver.getDriverStatus() != DriverStatus.approved) {
+            throw AppException.conflict("Tu perfil de conductor todavía no fue aprobado, no podés publicar viajes todavía");
+        }
         trip.setStatus(TripStatus.published);
         tripRepository.save(trip);
         return getById(tripId, driverId);
@@ -135,7 +157,7 @@ public class TripService {
     @Transactional(readOnly = true)
     public List<TripResponse> getMine(UUID driverId) {
         return tripRepository.findAllByDriverId(driverId).stream()
-                .map(this::toResponse)
+                .map(trip -> toResponse(trip, true))
                 .toList();
     }
 
@@ -149,7 +171,92 @@ public class TripService {
         if (!isOwner && trip.getStatus() == TripStatus.draft) {
             throw AppException.notFound("Viaje no encontrado");
         }
-        return toResponse(trip);
+        return toResponse(trip, isOwner);
+    }
+
+    @Transactional(readOnly = true)
+    public List<TripSearchResult> search(double destinationLat, double destinationLng, Instant date) {
+        Instant lowerBound = Instant.now();
+        Instant upperBound = null;
+        if (date != null) {
+            LocalDate day = date.atZone(ZoneOffset.UTC).toLocalDate();
+            Instant startOfDay = day.atStartOfDay(ZoneOffset.UTC).toInstant();
+            if (startOfDay.isAfter(lowerBound)) {
+                lowerBound = startOfDay;
+            }
+            upperBound = day.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+        }
+
+        Instant finalUpperBound = upperBound;
+        List<Trip> candidates = tripRepository.findAllByStatusAndDepartureAtAfter(TripStatus.published, lowerBound).stream()
+                .filter(t -> finalUpperBound == null || t.getDepartureAt().isBefore(finalUpperBound))
+                .toList();
+
+        List<TripSearchResult> results = new ArrayList<>();
+        for (Trip trip : candidates) {
+            TripSearchResult result = matchTrip(trip, destinationLat, destinationLng);
+            if (result != null) {
+                results.add(result);
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Busca por destino final únicamente: el pasajero todavía no elige dónde subirse (eso lo
+     * decide después, mirando el mapa completo en el detalle del viaje) — solo pide "a dónde
+     * voy" y acá se matchea contra cualquier punto de la ruta (parada intermedia o destino del
+     * viaje) que quede dentro del radio. El origen del viaje (índice 0) no cuenta como destino
+     * válido: nadie necesita viajar para "llegar" al punto donde arranca el conductor.
+     */
+    private TripSearchResult matchTrip(Trip trip, double destinationLat, double destinationLng) {
+        List<Stop> stops = stopRepository.findAllByTripIdOrderByOrder(trip.getId());
+        List<RouteBuilder.RoutePoint> route = RouteBuilder.build(trip, stops);
+
+        int destinationIndex = closestMatchIndex(route, destinationLat, destinationLng, 1);
+        if (destinationIndex < 0) return null;
+
+        // No se muestran viajes de conductores todavía no aprobados (documentación sin validar).
+        User driver = userRepository.findById(trip.getDriverId()).orElse(null);
+        if (driver == null || driver.getDriverStatus() != DriverStatus.approved) return null;
+
+        // Precio orientativo "desde": el tramo más barato posible para llegar a ese punto es
+        // subir justo en la parada anterior (el último tramo antes del destino matcheado).
+        List<TripSegment> segments = tripSegmentRepository.findAllByTripIdOrderByOrder(trip.getId());
+        double minPrice = RoutePricing.priceForRange(segments, route.size(), destinationIndex - 1, destinationIndex);
+
+        Vehicle vehicle = vehicleRepository.findById(trip.getVehicleId()).orElse(null);
+        RouteBuilder.RoutePoint toPoint = route.get(destinationIndex);
+
+        return new TripSearchResult(
+                trip.getId(),
+                driver.getName(),
+                driver.getRatingAvg(),
+                vehicle != null ? vehicle.getBrand() : null,
+                vehicle != null ? vehicle.getModel() : null,
+                trip.getOriginName(),
+                trip.getDestinationName(),
+                trip.getDepartureAt(),
+                toPoint.name(),
+                toPoint.stopId(),
+                minPrice,
+                trip.getAvailableSeats()
+        );
+    }
+
+    /** Punto de la ruta más cercano dentro de SEARCH_MATCH_RADIUS_KM, buscando desde fromIndex en adelante. */
+    private int closestMatchIndex(List<RouteBuilder.RoutePoint> route, double lat, double lng, int fromIndex) {
+        int bestIndex = -1;
+        double bestDistance = Double.MAX_VALUE;
+        for (int i = fromIndex; i < route.size(); i++) {
+            RouteBuilder.RoutePoint point = route.get(i);
+            double distance = GeoUtils.haversineKm(lat, lng, point.lat(), point.lng());
+            if (distance <= SEARCH_MATCH_RADIUS_KM && distance < bestDistance) {
+                bestDistance = distance;
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
     }
 
     public TripResponse cancel(UUID tripId, UUID driverId) {
@@ -160,10 +267,15 @@ public class TripService {
             throw AppException.conflict("El viaje ya está en un estado terminal");
         }
         trip.setStatus(TripStatus.cancelled);
-        // TODO Fase 7: si hay bookings con paymentStatus == held, disparar reembolso según
-        // anticipación a departureAt (política para cancelación con <2hs todavía a definir).
+        // Cancela también las reservas activas del viaje. El reembolso real sigue "a definir"
+        // (política según anticipación a departureAt) pero hoy no hay nada que reembolsar
+        // todavía: paymentStatus nunca pasa de "pending" porque no existe captura real de
+        // Mercado Pago (Fase 9).
+        List<Booking> activeBookings = bookingRepository.findAllByTripIdAndStatus(tripId, BookingStatus.confirmed);
+        activeBookings.forEach(b -> b.setStatus(BookingStatus.cancelled));
+        bookingRepository.saveAll(activeBookings);
         tripRepository.save(trip);
-        return toResponse(trip);
+        return toResponse(trip, true);
     }
 
     private Vehicle validateVehicle(UUID vehicleId, UUID driverId, int availableSeats) {
@@ -274,13 +386,31 @@ public class TripService {
         tripSegmentRepository.saveAll(segments);
     }
 
-    private TripResponse toResponse(Trip trip) {
+    private TripResponse toResponse(Trip trip, boolean includeBookings) {
         List<StopResponse> stops = stopRepository.findAllByTripIdOrderByOrder(trip.getId()).stream()
                 .map(StopResponse::from)
                 .toList();
         List<TripSegmentResponse> segments = tripSegmentRepository.findAllByTripIdOrderByOrder(trip.getId()).stream()
                 .map(TripSegmentResponse::from)
                 .toList();
-        return TripResponse.from(trip, stops, segments);
+        List<BookingSummaryResponse> bookings = includeBookings ? toBookingSummaries(trip) : List.of();
+        return TripResponse.from(trip, stops, segments, bookings);
+    }
+
+    /** Solo se llama para el dueño del viaje (ver toResponse) — no expone datos a terceros. */
+    private List<BookingSummaryResponse> toBookingSummaries(Trip trip) {
+        return bookingRepository.findAllByTripIdAndStatus(trip.getId(), BookingStatus.confirmed).stream()
+                .map(booking -> {
+                    String passengerName = userRepository.findById(booking.getPassengerId())
+                            .map(User::getName).orElse(null);
+                    String fromStopName = booking.getFromStopId() == null
+                            ? trip.getOriginName()
+                            : stopRepository.findById(booking.getFromStopId()).map(Stop::getName).orElse(null);
+                    return new BookingSummaryResponse(
+                            booking.getId(), passengerName, fromStopName,
+                            booking.getSeatNumber(), booking.getTotalPrice(), booking.getStatus()
+                    );
+                })
+                .toList();
     }
 }

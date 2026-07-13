@@ -23,15 +23,17 @@ public record TripResponse(
         TripStatus status,
         Instant createdAt,
         List<StopResponse> stops,
-        List<TripSegmentResponse> segments
+        List<TripSegmentResponse> segments,
+        List<BookingSummaryResponse> bookings
 ) {
-    public static TripResponse from(Trip t, List<StopResponse> stops, List<TripSegmentResponse> segments) {
+    public static TripResponse from(Trip t, List<StopResponse> stops, List<TripSegmentResponse> segments,
+                                     List<BookingSummaryResponse> bookings) {
         return new TripResponse(
                 t.getId(), t.getDriverId(), t.getVehicleId(),
                 t.getOriginName(), t.getOriginLat(), t.getOriginLng(),
                 t.getDestinationName(), t.getDestinationLat(), t.getDestinationLng(),
                 t.getDepartureAt(), t.getTotalSeats(), t.getAvailableSeats(),
-                t.getStatus(), t.getCreatedAt(), stops, segments
+                t.getStatus(), t.getCreatedAt(), stops, segments, bookings
         );
     }
 }

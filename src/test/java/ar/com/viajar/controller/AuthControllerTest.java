@@ -1,6 +1,5 @@
 package ar.com.viajar.controller;
 
-import ar.com.viajar.domain.User;
 import ar.com.viajar.domain.enums.UserRole;
 import ar.com.viajar.dto.response.AuthResponse;
 import ar.com.viajar.dto.response.UserResponse;
