@@ -18,7 +18,6 @@ import ar.com.viajar.repository.VehicleRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -30,7 +29,6 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -113,7 +111,7 @@ class BookingServiceTest {
                 leg(3, null, null, 900.0)
         );
         lenient().when(tripSegmentRepository.findAllByTripIdOrderByOrder(tripId)).thenReturn(segments);
-        lenient().when(bookingRepository.findAllByTripIdAndStatus(eq(tripId), eq(BookingStatus.confirmed))).thenReturn(List.of());
+        lenient().when(bookingRepository.findAllByTripIdAndStatus(tripId, BookingStatus.confirmed)).thenReturn(List.of());
         lenient().when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         return trip;
@@ -147,11 +145,11 @@ class BookingServiceTest {
         existing.setId(UUID.randomUUID());
         existing.setSeatNumber(1);
         existing.setStatus(BookingStatus.confirmed);
-        when(bookingRepository.findAllByTripIdAndStatus(eq(trip.getId()), eq(BookingStatus.confirmed)))
+        when(bookingRepository.findAllByTripIdAndStatus(trip.getId(), BookingStatus.confirmed))
                 .thenReturn(List.of(existing));
 
-        AppException ex = assertThrows(AppException.class,
-                () -> bookingService.create(passengerId, new CreateBookingRequest(trip.getId(), null)));
+        CreateBookingRequest request = new CreateBookingRequest(trip.getId(), null);
+        AppException ex = assertThrows(AppException.class, () -> bookingService.create(passengerId, request));
 
         assertEquals(409, ex.getStatus());
     }
@@ -164,11 +162,11 @@ class BookingServiceTest {
         existing.setPassengerId(passengerId);
         existing.setSeatNumber(1);
         existing.setStatus(BookingStatus.confirmed);
-        when(bookingRepository.findAllByTripIdAndStatus(eq(trip.getId()), eq(BookingStatus.confirmed)))
+        when(bookingRepository.findAllByTripIdAndStatus(trip.getId(), BookingStatus.confirmed))
                 .thenReturn(List.of(existing));
 
-        AppException ex = assertThrows(AppException.class,
-                () -> bookingService.create(passengerId, new CreateBookingRequest(trip.getId(), null)));
+        CreateBookingRequest request = new CreateBookingRequest(trip.getId(), null);
+        AppException ex = assertThrows(AppException.class, () -> bookingService.create(passengerId, request));
 
         assertEquals(409, ex.getStatus());
     }
@@ -178,8 +176,8 @@ class BookingServiceTest {
         Trip trip = publishedTripWithTwoStops(3, new Stop[2]);
         trip.setStatus(TripStatus.draft);
 
-        AppException ex = assertThrows(AppException.class,
-                () -> bookingService.create(passengerId, new CreateBookingRequest(trip.getId(), null)));
+        CreateBookingRequest request = new CreateBookingRequest(trip.getId(), null);
+        AppException ex = assertThrows(AppException.class, () -> bookingService.create(passengerId, request));
 
         assertEquals(409, ex.getStatus());
     }
@@ -188,8 +186,8 @@ class BookingServiceTest {
     void create_ownTrip_throwsBadRequest() {
         Trip trip = publishedTripWithTwoStops(3, new Stop[2]);
 
-        AppException ex = assertThrows(AppException.class,
-                () -> bookingService.create(driverId, new CreateBookingRequest(trip.getId(), null)));
+        CreateBookingRequest request = new CreateBookingRequest(trip.getId(), null);
+        AppException ex = assertThrows(AppException.class, () -> bookingService.create(driverId, request));
 
         assertEquals(400, ex.getStatus());
     }
@@ -198,8 +196,8 @@ class BookingServiceTest {
     void create_fromStopNotInTrip_throwsBadRequest() {
         Trip trip = publishedTripWithTwoStops(3, new Stop[2]);
 
-        AppException ex = assertThrows(AppException.class,
-                () -> bookingService.create(passengerId, new CreateBookingRequest(trip.getId(), UUID.randomUUID())));
+        CreateBookingRequest request = new CreateBookingRequest(trip.getId(), UUID.randomUUID());
+        AppException ex = assertThrows(AppException.class, () -> bookingService.create(passengerId, request));
 
         assertEquals(400, ex.getStatus());
     }

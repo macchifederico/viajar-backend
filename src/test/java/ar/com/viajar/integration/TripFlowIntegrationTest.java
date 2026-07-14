@@ -2,6 +2,7 @@ package ar.com.viajar.integration;
 
 import ar.com.viajar.domain.User;
 import ar.com.viajar.domain.Vehicle;
+import ar.com.viajar.domain.enums.DriverStatus;
 import ar.com.viajar.domain.enums.UserRole;
 import ar.com.viajar.dto.request.CreateTripRequest;
 import ar.com.viajar.dto.request.StopRequest;
@@ -40,6 +41,9 @@ class TripFlowIntegrationTest extends AbstractIntegrationTest {
         user.setPhone("+5491" + Math.abs(UUID.randomUUID().hashCode() % 100000000));
         user.setPasswordHash(passwordEncoder.encode("secret123"));
         user.setRole(role);
+        if (role == UserRole.driver) {
+            user.setDriverStatus(DriverStatus.approved);
+        }
         return userRepository.save(user);
     }
 
